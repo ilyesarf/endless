@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="ENDLESS — An adaptive liminal world that watches you back." />
+  <title>ENDLESS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Space+Grotesk:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Main Game Layout -->
+    <div id="game-container">
+      <!-- Canvas Area -->
+      <div id="canvas-wrap">
+        <canvas id="game-canvas"></canvas>
+        <!-- Floating narration overlay -->
+        <div id="narration-overlay" class="hidden"></div>
+        <!-- Mission prompt overlay -->
+        <div id="mission-prompt" class="hidden">
+          <div id="mission-prompt-title"></div>
+          <div id="mission-prompt-objective"></div>
+        </div>
+      </div>
+
+      <!-- Text Panel -->
+      <div id="text-panel">
+        <div id="panel-header">
+          <span class="panel-title">ENDLESS</span>
+          <span id="connection-status" class="status-dot disconnected"></span>
+        </div>
+        <div id="narrative-log"></div>
+        <div id="active-mission-panel">
+          <div class="section-label">ACTIVE MISSION</div>
+          <div id="active-mission-content">Awaiting first signal...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Bar -->
+    <div id="bottom-bar">
+      <div id="player-status">
+        <span class="bar-label">STATUS</span>
+        <span id="status-text">initializing</span>
+      </div>
+      <div id="zone-info">
+        <span class="bar-label">ZONE</span>
+        <span id="zone-name">void</span>
+      </div>
+      <div id="resource-display">
+        <span class="bar-label">ENERGY</span>
+        <span id="resource-bar"></span>
+        <span id="resource-text">10/10</span>
+      </div>
+      <div id="session-depth">
+        <span class="bar-label">DEPTH</span>
+        <span id="depth-value">0</span>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
