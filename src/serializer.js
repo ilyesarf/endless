@@ -6,101 +6,50 @@
 export function serializeState(playerModel, gameState, eventContext = {}) {
   const parts = [];
 
-  // Current position context
-  const zone = gameState.currentZone || playerModel.currentZone || "void";
+  const zone = gameState.currentZone || playerModel.currentZone || "unknown";
   parts.push(`Current zone: ${zone}.`);
+  parts.push(`Energy: ${Math.round(playerModel.energy)}/${playerModel.maxEnergy}.`);
+  parts.push(`Sight: ${playerModel.sightRadius}. Speed: ${playerModel.moveSpeed.toFixed(1)}. Memory: ${(playerModel.mapMemory * 100).toFixed(0)}%.`);
 
-  // Resources
-  parts.push(
-    `Resources: ${playerModel.resources.current}/${playerModel.resources.max}.`
-  );
-
-  // Active mission
   if (playerModel.activeMission) {
     parts.push(`Active mission: ${playerModel.activeMission.title}.`);
   }
 
-  // Event-specific context
-  if (eventContext.hesitationTime) {
-    parts.push(
-      `Player hesitated ${eventContext.hesitationTime.toFixed(1)}s before deciding.`
-    );
-  }
+  parts.push(`Zones explored: ${playerModel.zonesVisited.size}. Entities encountered: ${playerModel.entitiesEncountered}.`);
+  parts.push(`Session depth: ${playerModel.sessionDepth}. Distance traveled: ${playerModel.totalDistanceTraveled.toFixed(0)}.`);
 
-  if (eventContext.choiceDescription) {
-    parts.push(eventContext.choiceDescription);
-  }
+  if (eventContext.hesitationTime) parts.push(`Hesitated ${eventContext.hesitationTime.toFixed(1)}s before deciding.`);
+  if (eventContext.choiceDescription) parts.push(eventContext.choiceDescription);
 
-  if (eventContext.approachTime) {
-    parts.push(
-      `Player took ${eventContext.approachTime.toFixed(1)}s to approach.`
-    );
-  }
-
-  if (eventContext.resourcesSpent !== undefined) {
-    parts.push(`Player spent ${eventContext.resourcesSpent} resources.`);
-  }
-
-  if (eventContext.abandoned) {
-    parts.push("Player chose to leave through the exit.");
-  }
-
-  if (eventContext.pushedThrough) {
-    parts.push("Player pushed through despite the option to leave.");
-  }
-
-  if (eventContext.engaged) {
-    parts.push("Player chose to engage directly.");
-  }
-
-  if (eventContext.avoided) {
-    parts.push("Player found a way around instead of engaging.");
-  }
-
-  // Session depth
-  parts.push(`Session depth: ${playerModel.sessionDepth}.`);
-
-  // Recent decisions (last 3)
   if (playerModel.decisions.length > 0) {
     const recent = playerModel.decisions.slice(-3);
-    const decisionSummary = recent
-      .map((d) => d.description || d.type || "unknown")
-      .join("; ");
-    parts.push(`Recent decisions: ${decisionSummary}.`);
+    parts.push(`Recent: ${recent.map(d => d.description || d.type).join("; ")}.`);
   }
 
   return parts.join(" ");
 }
 
-export function serializeCalibrationSummary(calibrationResults) {
+export function serializeCalibrationSummary(results) {
   const parts = ["=== CALIBRATION SUMMARY ==="];
 
-  if (calibrationResults.the_fork) {
-    const f = calibrationResults.the_fork;
-    parts.push(
-      `The Fork: Player chose "${f.choice}" after hesitating ${f.hesitationTime.toFixed(1)}s.`
-    );
+  if (results.the_fork) {
+    const f = results.the_fork;
+    parts.push(`The Fork: Chose "${f.choice}" after ${f.hesitationTime.toFixed(1)}s. First looked at ${f.firstLook}. Risk appetite: ${f.riskAppetite}.`);
   }
 
-  if (calibrationResults.the_abandon) {
-    const a = calibrationResults.the_abandon;
-    parts.push(
-      `The Abandon: Player ${a.abandoned ? "left through the exit" : "pushed through"} after ${a.timeSpent.toFixed(1)}s.`
-    );
+  if (results.the_drain) {
+    const d = results.the_drain;
+    parts.push(`The Drain: ${d.reachedCenter ? "Crossed drain field to collect reward" : d.enteredField ? "Entered field but turned back" : "Stayed outside the field"}. Edge hover: ${d.edgeHoverTime.toFixed(1)}s. Loss tolerance: ${d.lossTolerance}.`);
   }
 
-  if (calibrationResults.the_scarcity) {
-    const s = calibrationResults.the_scarcity;
-    parts.push(
-      `The Scarcity: Player spent ${s.resourcesSpent}/${s.resourcesAvailable} resources. Strategy: ${s.strategy}.`
-    );
+  if (results.the_hoard) {
+    const h = results.the_hoard;
+    parts.push(`The Hoard: Took ${h.orbsChosen.map(o => o.upgrade.type).join("+")}. Left: ${h.orbLeft?.upgrade.type || "unknown"}. Strategy: ${h.strategy}. Decision time: ${h.hesitationTime.toFixed(1)}s.`);
   }
 
-  if (calibrationResults.the_confrontation) {
-    const c = calibrationResults.the_confrontation;
-    parts.push(
-      `The Confrontation: Player ${c.engaged ? "engaged directly" : "avoided"} after ${c.approachTime.toFixed(1)}s.`
-    );
+  if (results.the_presence) {
+    const p = results.the_presence;
+    parts.push(`The Presence: ${p.confrontationInstinct} response. Behavior: ${p.behavior}. Response time: ${p.responseTime.toFixed(1)}s.`);
   }
 
   return parts.join(" ");

@@ -1,41 +1,25 @@
 /**
- * ENDLESS — Calibration Missions
- * State machine for the 4 calibration missions that profile the player.
+ * ENDLESS — Calibration Missions (Survival RPG version)
  *
- * 1. The Fork — split path, log choice + hesitation
- * 2. The Abandon — mid-mission exit, log push-through vs leave
- * 3. The Scarcity — limited resources, log hoarding vs spending
- * 4. The Confrontation — entity blocks path, log engage vs avoid
+ * Mission 1 — The Fork: two paths, risk appetite
+ * Mission 2 — The Drain: slow-drain field with net-positive center
+ * Mission 3 — The Hoard: 3 upgrade orbs, pick 2
+ * Mission 4 — The Presence: entity drifts toward player
  */
 
 import { send } from "./socket.js";
 import { serializeState, serializeCalibrationSummary } from "./serializer.js";
 import {
-  recordDecision,
-  spendResource,
-  startHesitation,
-  endHesitation,
-  setActiveMission,
-  completeMission,
+  recordDecision, startHesitation, endHesitation, setActiveMission,
+  completeMission, applySpeedUpgrade, applySightUpgrade, applyMemoryUpgrade,
 } from "./playerModel.js";
 
-// Mission phases
-const PHASES = [
-  "waiting",
-  "the_fork",
-  "the_abandon",
-  "the_scarcity",
-  "the_confrontation",
-  "complete",
-];
-
+const PHASES = ["waiting", "the_fork", "the_drain", "the_hoard", "the_presence", "complete"];
 let currentPhaseIndex = 0;
 let missionState = {};
 let playerModelRef = null;
 let gameRef = null;
 let calibrationResults = {};
-
-// Timing
 let phaseStartTime = 0;
 let transitionTimer = null;
 
@@ -47,16 +31,12 @@ export function initMissions(playerModel, game) {
   missionState = {};
 }
 
-export function getCurrentPhase() {
-  return PHASES[currentPhaseIndex] || "complete";
-}
-
-export function isCalibrationComplete() {
-  return currentPhaseIndex >= PHASES.length - 1;
-}
+export function getCurrentPhase() { return PHASES[currentPhaseIndex] || "complete"; }
+export function isCalibrationComplete() { return currentPhaseIndex >= PHASES.length - 1; }
+export function getCalibrationResults() { return calibrationResults; }
 
 export function startCalibration() {
-  currentPhaseIndex = 1; // skip 'waiting'
+  currentPhaseIndex = 1;
   setupPhase();
 }
 
@@ -64,473 +44,503 @@ function setupPhase() {
   const phase = getCurrentPhase();
   phaseStartTime = Date.now();
   missionState = {};
+  gameRef.calibrationObjects = [];
 
   switch (phase) {
-    case "the_fork":
-      setupTheFork();
-      break;
-    case "the_abandon":
-      setupTheAbandon();
-      break;
-    case "the_scarcity":
-      setupTheScarcity();
-      break;
-    case "the_confrontation":
-      setupTheConfrontation();
-      break;
-    case "complete":
-      onCalibrationComplete();
-      break;
+    case "the_fork": setupTheFork(); break;
+    case "the_drain": setupTheDrain(); break;
+    case "the_hoard": setupTheHoard(); break;
+    case "the_presence": setupThePresence(); break;
+    case "complete": onCalibrationComplete(); break;
   }
 }
 
 function advancePhase() {
   currentPhaseIndex++;
   if (transitionTimer) clearTimeout(transitionTimer);
-
-  // Brief pause between phases
-  transitionTimer = setTimeout(() => {
-    setupPhase();
-  }, 1500);
+  transitionTimer = setTimeout(() => setupPhase(), 1800);
 }
 
-// ─── THE FORK ──────────────────────────────────────────────────────────────
-// Two paths diverge. Which does the player take, and how long do they hesitate?
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION 1 — THE FORK
+// Two paths diverge. Left = safe/warm. Right = dark but shimmer of value.
+// ═══════════════════════════════════════════════════════════════════════════
 
 function setupTheFork() {
   setActiveMission(playerModelRef, {
-    title: "The Fork",
-    objective: "Two paths diverge ahead. Choose one.",
-    type: "calibration",
+    title: "The Fork", objective: "Two paths. Choose one.", type: "calibration",
   });
 
-  // Place two path markers
-  const cx = gameRef.canvas.width / 2;
-  const cy = gameRef.canvas.height / 2;
+  const px = gameRef.player.x;
+  const py = gameRef.player.y;
 
   gameRef.calibrationObjects = [
     {
-      id: "fork_left",
-      type: "path_marker",
-      x: cx - 160,
-      y: cy - 80,
-      radius: 40,
-      label: "◀ darker path",
-      color: "#2a1845",
-      glowColor: "rgba(90, 50, 160, 0.4)",
+      id: "fork_left", type: "path_marker",
+      x: px - 180, y: py - 120, radius: 35,
+      label: "warm glow ahead",
+      color: "#3a2a0a", glowColor: "rgba(232, 168, 76, 0.35)",
     },
     {
-      id: "fork_right",
-      type: "path_marker",
-      x: cx + 160,
-      y: cy - 80,
-      radius: 40,
-      label: "brighter path ▶",
-      color: "#1a3a45",
-      glowColor: "rgba(50, 140, 160, 0.4)",
+      id: "fork_right", type: "path_marker",
+      x: px + 180, y: py - 120, radius: 35,
+      label: "something glints...",
+      color: "#1a1a28", glowColor: "rgba(94, 196, 182, 0.2)",
+      subtle: true,
     },
   ];
 
+  missionState.backtracked = false;
+  missionState.firstApproach = null;
   startHesitation(playerModelRef, "fork");
-  updateMissionUI("The Fork", "Two paths diverge ahead. Choose one.");
-  showCalibrationNarration("Two paths open before you. Neither reveals where it leads.");
+  showUI("The Fork", "Two paths diverge. Neither tells you where it leads.");
+  narrate("Two paths open before you. One glows faintly with warmth. The other shimmers — darker, uncertain.");
 }
 
-export function handleForkChoice(choiceId) {
+export function checkCalibrationCollisions(px, py) {
+  const phase = getCurrentPhase();
+  if (phase === "waiting" || phase === "complete") return;
+
+  for (const obj of gameRef.calibrationObjects) {
+    const dist = Math.sqrt((px - obj.x) ** 2 + (py - obj.y) ** 2);
+
+    // Track first approach for fork
+    if (phase === "the_fork" && dist < obj.radius + 40 && !missionState.firstApproach) {
+      missionState.firstApproach = obj.id;
+    }
+
+    if (dist < (obj.radius || 25) + 10) {
+      switch (phase) {
+        case "the_fork":
+          if (obj.id === "fork_left" || obj.id === "fork_right") resolveTheFork(obj.id);
+          break;
+        case "the_drain":
+          if (obj.id === "drain_center") resolveTheDrain(true);
+          break;
+        case "the_hoard":
+          if (obj.type === "upgrade_orb" && !obj.taken) pickUpOrb(obj);
+          break;
+        case "the_presence":
+          if (obj.id === "presence_entity") resolveThePresence("engage");
+          break;
+      }
+    }
+  }
+
+  // Drain field check (continuous, not just on collision)
+  if (phase === "the_drain" && !missionState.resolved) {
+    checkDrainField(px, py);
+  }
+
+  // Presence avoidance check
+  if (phase === "the_presence" && !missionState.resolved) {
+    updatePresence();
+  }
+}
+
+function resolveTheFork(choiceId) {
   if (getCurrentPhase() !== "the_fork" || missionState.resolved) return;
   missionState.resolved = true;
 
   const hesitationTime = endHesitation(playerModelRef, "fork");
-  const choice = choiceId === "fork_left" ? "darker path" : "brighter path";
+  const choice = choiceId === "fork_left" ? "warm path (safe)" : "dark path (risky)";
+  const firstLook = missionState.firstApproach === "fork_left" ? "warm path" : "dark path";
 
   calibrationResults.the_fork = {
-    choice,
-    hesitationTime,
-    choiceId,
+    choice, choiceId, hesitationTime, firstLook,
+    backtracked: missionState.backtracked,
+    riskAppetite: choiceId === "fork_right" ? "high" : "low",
   };
 
   recordDecision(playerModelRef, {
     type: "fork_choice",
-    description: `Chose the ${choice} after ${hesitationTime.toFixed(1)}s`,
-  });
-
-  const snapshot = serializeState(playerModelRef, gameRef, {
-    hesitationTime,
-    choiceDescription: `Player chose the ${choice}.`,
+    description: `Chose the ${choice} after ${hesitationTime.toFixed(1)}s. First looked at ${firstLook}.`,
   });
 
   send("calibration_event", {
     calibration_type: "the_fork",
     result: calibrationResults.the_fork,
-  }, snapshot);
+  }, serializeState(playerModelRef, gameRef, { hesitationTime, choiceDescription: `Chose ${choice}.` }));
 
   gameRef.calibrationObjects = [];
   completeMission(playerModelRef);
-  showCalibrationNarration(`You chose the ${choice}. Something noticed.`);
+  narrate(choiceId === "fork_right"
+    ? "You chose the unknown. Something in the dark took notice."
+    : "You chose warmth. The familiar path. Something out there will remember what you avoided.");
   advancePhase();
 }
 
-// ─── THE ABANDON ───────────────────────────────────────────────────────────
-// Player is mid-objective. A subtle exit appears. Do they leave or stay?
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION 2 — THE DRAIN
+// Slow-drain field with a net-positive energy source in the center.
+// ═══════════════════════════════════════════════════════════════════════════
 
-function setupTheAbandon() {
+function setupTheDrain() {
   setActiveMission(playerModelRef, {
-    title: "The Abandon",
-    objective: "Reach the signal ahead.",
-    type: "calibration",
+    title: "The Drain", objective: "A high-value energy source sits inside a drain field.", type: "calibration",
   });
 
-  const cx = gameRef.canvas.width / 2;
-  const cy = gameRef.canvas.height / 2;
+  const px = gameRef.player.x + 60;
+  const py = gameRef.player.y - 80;
 
-  // Main objective marker
+  missionState.drainField = {
+    x: px, y: py, radius: 150,
+    drainRate: 1.5, // energy/second inside
+  };
+
+  // The center energy source — worth MORE than the drain cost
   gameRef.calibrationObjects = [
     {
-      id: "abandon_goal",
-      type: "objective_marker",
-      x: cx,
-      y: 80,
-      radius: 30,
-      label: "the signal",
-      color: "#3a2a55",
-      glowColor: "rgba(120, 80, 200, 0.5)",
-    },
-    {
-      id: "abandon_exit",
-      type: "exit_marker",
-      x: cx + 220,
-      y: cy + 100,
-      radius: 24,
-      label: "",
-      color: "#1a1a1f",
-      glowColor: "rgba(60, 60, 80, 0.2)",
-      subtle: true,
+      id: "drain_center", type: "energy_source",
+      x: px, y: py, radius: 20,
+      label: "+35 energy",
+      color: "#3a2a0a", glowColor: "rgba(232, 168, 76, 0.5)",
     },
   ];
 
-  missionState.exitRevealed = false;
-  missionState.exitRevealTime = null;
+  missionState.enteredField = false;
+  missionState.edgeHoverStart = null;
+  missionState.timeInField = 0;
+  missionState.energyLostInField = 0;
+  startHesitation(playerModelRef, "drain");
+  showUI("The Drain", "An energy source sits inside a drain field. Is it worth the cost?");
+  narrate("A drain field surrounds a bright energy source. Walking through costs energy — but the center promises to give back more.");
 
-  // Reveal the exit subtly after player starts moving toward goal
-  setTimeout(() => {
-    if (getCurrentPhase() === "the_abandon" && !missionState.resolved) {
-      missionState.exitRevealed = true;
-      missionState.exitRevealTime = Date.now();
-      const exitObj = gameRef.calibrationObjects.find(
-        (o) => o.id === "abandon_exit"
-      );
-      if (exitObj) {
-        exitObj.label = "an exit?";
-        exitObj.glowColor = "rgba(80, 80, 100, 0.3)";
-      }
+  // Auto-resolve after 25 seconds if player never enters
+  missionState.timeout = setTimeout(() => {
+    if (!missionState.resolved) resolveTheDrain(false);
+  }, 25000);
+}
+
+function checkDrainField(px, py) {
+  const field = missionState.drainField;
+  if (!field) return;
+
+  const dist = Math.sqrt((px - field.x) ** 2 + (py - field.y) ** 2);
+
+  // Track hovering at edge
+  if (dist < field.radius + 30 && dist > field.radius && !missionState.edgeHoverStart) {
+    missionState.edgeHoverStart = Date.now();
+  }
+
+  // Inside the drain field
+  if (dist < field.radius) {
+    if (!missionState.enteredField) {
+      missionState.enteredField = true;
+      missionState.fieldEntryTime = Date.now();
     }
-  }, 3000);
-
-  updateMissionUI("The Abandon", "Reach the signal ahead.");
-  showCalibrationNarration("A signal pulses in the distance. Move toward it.");
+    // Drain energy (called every frame, so use per-frame drain)
+    const drain = field.drainRate / 60; // assuming ~60fps
+    playerModelRef.energy = Math.max(1, playerModelRef.energy - drain); // don't kill during calibration
+    missionState.energyLostInField += drain;
+    missionState.timeInField += 1/60;
+  }
 }
 
-export function handleAbandonChoice(choiceId) {
-  if (getCurrentPhase() !== "the_abandon" || missionState.resolved) return;
+function resolveTheDrain(reachedCenter) {
+  if (getCurrentPhase() !== "the_drain" || missionState.resolved) return;
   missionState.resolved = true;
+  if (missionState.timeout) clearTimeout(missionState.timeout);
 
-  const timeSpent = (Date.now() - phaseStartTime) / 1000;
-  const abandoned = choiceId === "abandon_exit";
+  const hesitationTime = endHesitation(playerModelRef, "drain");
+  const edgeHoverTime = missionState.edgeHoverStart
+    ? (Date.now() - missionState.edgeHoverStart) / 1000 : 0;
 
-  calibrationResults.the_abandon = {
-    abandoned,
-    timeSpent,
-    exitWasRevealed: missionState.exitRevealed,
+  if (reachedCenter) {
+    // Net positive reward
+    playerModelRef.energy = Math.min(playerModelRef.maxEnergy, playerModelRef.energy + 35);
+  }
+
+  calibrationResults.the_drain = {
+    enteredField: missionState.enteredField,
+    reachedCenter,
+    hesitationTime,
+    edgeHoverTime,
+    timeInField: missionState.timeInField,
+    energyLost: missionState.energyLostInField,
+    lossTolerance: reachedCenter ? "high" : missionState.enteredField ? "medium" : "low",
   };
 
   recordDecision(playerModelRef, {
-    type: "abandon_choice",
-    description: abandoned
-      ? `Abandoned the mission after ${timeSpent.toFixed(1)}s`
-      : `Pushed through to goal after ${timeSpent.toFixed(1)}s`,
-  });
-
-  const snapshot = serializeState(playerModelRef, gameRef, {
-    abandoned,
-    pushedThrough: !abandoned,
+    type: "drain_choice",
+    description: reachedCenter
+      ? `Entered drain field and reached the center. Lost ${missionState.energyLostInField.toFixed(1)} energy, gained 35.`
+      : `${missionState.enteredField ? "Entered but didn't reach center" : "Avoided the drain field entirely"}.`,
   });
 
   send("calibration_event", {
-    calibration_type: "the_abandon",
-    result: calibrationResults.the_abandon,
-  }, snapshot);
+    calibration_type: "the_drain",
+    result: calibrationResults.the_drain,
+  }, serializeState(playerModelRef, gameRef, {
+    choiceDescription: reachedCenter
+      ? "Player crossed the drain field to collect the reward."
+      : "Player avoided or couldn't complete the drain field.",
+  }));
 
   gameRef.calibrationObjects = [];
+  missionState.drainField = null;
   completeMission(playerModelRef);
-  showCalibrationNarration(
-    abandoned
-      ? "You left. The signal fades — but it remembers."
-      : "You pressed on. Persistence is its own kind of answer."
-  );
+
+  narrate(reachedCenter
+    ? "You pushed through the cost. The reward was real — and the world noted your tolerance for pain."
+    : missionState.enteredField
+      ? "You entered but turned back. The cost felt too high, even if the math disagreed."
+      : "You stayed outside. Sometimes the smartest move is the one that feels least brave.");
   advancePhase();
 }
 
-// ─── THE SCARCITY ──────────────────────────────────────────────────────────
-// Limited resource. Nodes to spend on. Do they hoard or spend?
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION 3 — THE HOARD
+// Three upgrade orbs, player can only carry two.
+// ═══════════════════════════════════════════════════════════════════════════
 
-function setupTheScarcity() {
-  playerModelRef.resources.current = 5;
-  playerModelRef.resources.max = 5;
-
+function setupTheHoard() {
   setActiveMission(playerModelRef, {
-    title: "The Scarcity",
-    objective: "You have limited energy. Spend it wisely — or don't.",
-    type: "calibration",
+    title: "The Hoard", objective: "Three upgrades. You can only carry two. Choose wisely.", type: "calibration",
   });
 
-  const cx = gameRef.canvas.width / 2;
-  const cy = gameRef.canvas.height / 2;
+  const px = gameRef.player.x;
+  const py = gameRef.player.y;
 
-  // Create energy nodes to interact with
   gameRef.calibrationObjects = [
     {
-      id: "scarcity_node_1",
-      type: "energy_node",
-      x: cx - 140,
-      y: cy - 60,
-      radius: 28,
-      label: "consume (−1)",
-      color: "#3a1a45",
-      glowColor: "rgba(160, 60, 180, 0.4)",
-      cost: 1,
-      consumed: false,
+      id: "orb_speed", type: "upgrade_orb",
+      x: px - 100, y: py - 100, radius: 22,
+      label: "SPEED +0.5",
+      color: "#1a3a20", glowColor: "rgba(94, 196, 120, 0.35)",
+      upgrade: { type: "speed", amount: 0.5 },
+      taken: false, known: true,
     },
     {
-      id: "scarcity_node_2",
-      type: "energy_node",
-      x: cx + 140,
-      y: cy - 60,
-      radius: 28,
-      label: "consume (−1)",
-      color: "#3a1a45",
-      glowColor: "rgba(160, 60, 180, 0.4)",
-      cost: 1,
-      consumed: false,
+      id: "orb_unknown_1", type: "upgrade_orb",
+      x: px + 100, y: py - 100, radius: 22,
+      label: "???",
+      color: "#2a1a3a", glowColor: "rgba(160, 120, 200, 0.3)",
+      upgrade: { type: "sight", amount: 30 },
+      taken: false, known: false,
     },
     {
-      id: "scarcity_node_3",
-      type: "energy_node",
-      x: cx,
-      y: cy + 100,
-      radius: 28,
-      label: "consume (−2)",
-      color: "#451a3a",
-      glowColor: "rgba(180, 60, 140, 0.4)",
-      cost: 2,
-      consumed: false,
-    },
-    {
-      id: "scarcity_done",
-      type: "proceed_marker",
-      x: cx,
-      y: 60,
-      radius: 30,
-      label: "move on",
-      color: "#1a2a3a",
-      glowColor: "rgba(60, 100, 160, 0.3)",
+      id: "orb_unknown_2", type: "upgrade_orb",
+      x: px, y: py - 180, radius: 22,
+      label: "???",
+      color: "#3a2a1a", glowColor: "rgba(200, 160, 100, 0.3)",
+      upgrade: { type: "memory", amount: 0.25 },
+      taken: false, known: false,
     },
   ];
 
-  missionState.resourcesSpent = 0;
-  missionState.nodesConsumed = 0;
-  updateResourceUI();
-
-  updateMissionUI("The Scarcity", "You have limited energy. Spend it — or conserve it.");
-  showCalibrationNarration(
-    "Your energy is finite here. Each node costs something. You can move on at any time."
-  );
+  missionState.orbsTaken = 0;
+  missionState.orbsChosen = [];
+  missionState.orbLeft = null;
+  startHesitation(playerModelRef, "hoard");
+  showUI("The Hoard", "Three upgrade orbs. You can only carry two.");
+  narrate("Three upgrades cluster ahead. One labeled, two unknown. You can only take two. Choose what to leave behind.");
 }
 
-export function handleScarcityInteraction(objectId) {
-  if (getCurrentPhase() !== "the_scarcity" || missionState.resolved) return;
+function pickUpOrb(orb) {
+  if (getCurrentPhase() !== "the_hoard" || orb.taken || missionState.resolved) return;
 
-  if (objectId === "scarcity_done") {
-    missionState.resolved = true;
-    finishScarcity();
-    return;
+  if (missionState.orbsTaken >= 2) return; // already got two
+
+  orb.taken = true;
+  orb.color = "#0a0a0a";
+  orb.glowColor = "rgba(40,40,40,0.1)";
+  orb.label = "taken";
+  missionState.orbsTaken++;
+  missionState.orbsChosen.push({
+    id: orb.id,
+    upgrade: orb.upgrade,
+    wasKnown: orb.known,
+  });
+
+  // Apply the upgrade
+  switch (orb.upgrade.type) {
+    case "speed": applySpeedUpgrade(playerModelRef, orb.upgrade.amount); break;
+    case "sight": applySightUpgrade(playerModelRef, orb.upgrade.amount); break;
+    case "memory": applyMemoryUpgrade(playerModelRef, orb.upgrade.amount); break;
   }
 
-  const node = gameRef.calibrationObjects.find((o) => o.id === objectId);
-  if (!node || node.consumed || node.type !== "energy_node") return;
+  narrate(orb.known
+    ? `Speed +${orb.upgrade.amount}. You chose the known.`
+    : `The orb reveals: ${orb.upgrade.type === "sight" ? "SIGHT +30" : "MEMORY +25%"}. The unknown had a gift.`);
 
-  if (playerModelRef.resources.current < node.cost) {
-    showCalibrationNarration("Not enough energy.");
-    return;
-  }
+  if (missionState.orbsTaken >= 2) {
+    // Determine which orb was left
+    const leftOrb = gameRef.calibrationObjects.find(o => o.type === "upgrade_orb" && !o.taken);
+    missionState.orbLeft = leftOrb ? { id: leftOrb.id, upgrade: leftOrb.upgrade, wasKnown: leftOrb.known } : null;
 
-  node.consumed = true;
-  node.color = "#0a0a10";
-  node.glowColor = "rgba(40, 40, 50, 0.1)";
-  node.label = "depleted";
-
-  spendResource(playerModelRef, node.cost);
-  missionState.resourcesSpent += node.cost;
-  missionState.nodesConsumed++;
-  updateResourceUI();
-
-  // Auto-finish if all resources spent or all nodes consumed
-  const allConsumed = gameRef.calibrationObjects
-    .filter((o) => o.type === "energy_node")
-    .every((o) => o.consumed);
-
-  if (allConsumed || playerModelRef.resources.current <= 0) {
-    setTimeout(() => {
-      if (!missionState.resolved) {
-        missionState.resolved = true;
-        finishScarcity();
-      }
-    }, 1000);
+    setTimeout(() => resolveTheHoard(), 1200);
   }
 }
 
-function finishScarcity() {
-  const strategy =
-    missionState.resourcesSpent === 0
-      ? "full_hoard"
-      : missionState.resourcesSpent >= 4
-        ? "free_spender"
-        : "cautious";
+function resolveTheHoard() {
+  if (missionState.resolved) return;
+  missionState.resolved = true;
 
-  calibrationResults.the_scarcity = {
-    resourcesSpent: missionState.resourcesSpent,
-    resourcesAvailable: 5,
-    nodesConsumed: missionState.nodesConsumed,
-    strategy,
+  const hesitationTime = endHesitation(playerModelRef, "hoard");
+  const choseKnown = missionState.orbsChosen.some(o => o.wasKnown);
+  const choseUnknowns = missionState.orbsChosen.filter(o => !o.wasKnown).length;
+
+  calibrationResults.the_hoard = {
+    orbsChosen: missionState.orbsChosen,
+    orbLeft: missionState.orbLeft,
+    hesitationTime,
+    strategy: choseUnknowns === 2 ? "risk_taker" : choseUnknowns === 1 ? "balanced" : "certainty_seeker",
+    leftKnown: missionState.orbLeft?.wasKnown || false,
   };
 
   recordDecision(playerModelRef, {
-    type: "scarcity_choice",
-    description: `Spent ${missionState.resourcesSpent}/5 energy (${strategy})`,
-  });
-
-  const snapshot = serializeState(playerModelRef, gameRef, {
-    resourcesSpent: missionState.resourcesSpent,
+    type: "hoard_choice",
+    description: `Took ${missionState.orbsChosen.map(o => o.upgrade.type).join(" + ")}, left ${missionState.orbLeft?.upgrade.type || "unknown"}.`,
   });
 
   send("calibration_event", {
-    calibration_type: "the_scarcity",
-    result: calibrationResults.the_scarcity,
-  }, snapshot);
+    calibration_type: "the_hoard",
+    result: calibrationResults.the_hoard,
+  }, serializeState(playerModelRef, gameRef, {
+    choiceDescription: `Chose ${missionState.orbsChosen.length} orbs, left one behind.`,
+  }));
 
   gameRef.calibrationObjects = [];
   completeMission(playerModelRef);
-
-  // Reset resources for future use
-  playerModelRef.resources.current = 10;
-  playerModelRef.resources.max = 10;
-  updateResourceUI();
-
-  showCalibrationNarration(
-    strategy === "full_hoard"
-      ? "You kept everything. What are you saving it for?"
-      : strategy === "free_spender"
-        ? "You gave freely. Generosity — or recklessness?"
-        : "Measured. Careful. The void notes your precision."
-  );
+  narrate("Two taken. One abandoned. The void notes what you considered worth keeping — and what you could let go.");
   advancePhase();
 }
 
-// ─── THE CONFRONTATION ─────────────────────────────────────────────────────
-// Entity blocks the path. Engage or avoid?
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION 4 — THE PRESENCE
+// Entity drifts toward player. Engage, freeze, or flee.
+// ═══════════════════════════════════════════════════════════════════════════
 
-function setupTheConfrontation() {
+function setupThePresence() {
   setActiveMission(playerModelRef, {
-    title: "The Confrontation",
-    objective: "Something blocks your way forward.",
-    type: "calibration",
+    title: "The Presence", objective: "Something approaches from the edge of sight.", type: "calibration",
   });
 
-  const cx = gameRef.canvas.width / 2;
-  const cy = gameRef.canvas.height / 2;
+  const px = gameRef.player.x;
+  const py = gameRef.player.y;
+  // Spawn far enough to give player time to decide
+  const angle = Math.random() * Math.PI * 2;
+  const spawnDist = playerModelRef.sightRadius + 60;
 
   gameRef.calibrationObjects = [
     {
-      id: "confrontation_entity",
-      type: "blocker_entity",
-      x: cx,
-      y: cy - 40,
-      radius: 45,
+      id: "presence_entity", type: "presence",
+      x: px + Math.cos(angle) * spawnDist,
+      y: py + Math.sin(angle) * spawnDist,
+      radius: 30,
       label: "",
-      color: "#4a1a1a",
-      glowColor: "rgba(200, 60, 60, 0.5)",
-      pulseSpeed: 0.03,
-    },
-    {
-      id: "confrontation_engage",
-      type: "engage_marker",
-      x: cx,
-      y: cy - 40,
-      radius: 55,
-      label: "approach",
-      color: "transparent",
-      glowColor: "rgba(200, 80, 80, 0.2)",
-    },
-    {
-      id: "confrontation_avoid",
-      type: "avoid_marker",
-      x: cx + 240,
-      y: cy + 60,
-      radius: 30,
-      label: "go around",
-      color: "#1a1a2a",
-      glowColor: "rgba(60, 60, 120, 0.3)",
-      subtle: true,
+      color: "#2a1a1a", glowColor: "rgba(200, 100, 80, 0.4)",
+      pulseSpeed: 0.025,
+      speed: 0.8, // walking pace
     },
   ];
 
-  startHesitation(playerModelRef, "confrontation");
-  updateMissionUI("The Confrontation", "Something blocks your way.");
-  showCalibrationNarration(
-    "A presence stands before you, unmoving. It does not speak. It waits."
-  );
+  missionState.firstSeen = null;
+  missionState.playerPositions = [];
+  missionState.initialPlayerPos = { x: px, y: py };
+  startHesitation(playerModelRef, "presence");
+  showUI("The Presence", "Something is moving toward you.");
+  narrate("A presence emerges at the edge of your sight. It moves toward you — slowly, steadily. It is not aggressive. It is curious.");
+
+  // Timeout as safety
+  missionState.timeout = setTimeout(() => {
+    if (!missionState.resolved) resolveThePresence("timeout");
+  }, 20000);
 }
 
-export function handleConfrontationChoice(choiceId) {
-  if (getCurrentPhase() !== "the_confrontation" || missionState.resolved) return;
+function updatePresence() {
+  const entity = gameRef.calibrationObjects.find(o => o.id === "presence_entity");
+  if (!entity) return;
+
+  // Move toward player
+  const dx = gameRef.player.x - entity.x;
+  const dy = gameRef.player.y - entity.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  if (dist > 15) {
+    entity.x += (dx / dist) * entity.speed;
+    entity.y += (dy / dist) * entity.speed;
+  }
+
+  // Track if player first sees it (within sight radius)
+  if (!missionState.firstSeen && dist < playerModelRef.sightRadius) {
+    missionState.firstSeen = Date.now();
+  }
+
+  // Track player movement pattern
+  if (missionState.firstSeen) {
+    missionState.playerPositions.push({ x: gameRef.player.x, y: gameRef.player.y, t: Date.now() });
+  }
+
+  // Check if player is fleeing (moving away significantly)
+  if (missionState.firstSeen && missionState.playerPositions.length > 30) {
+    const initial = missionState.initialPlayerPos;
+    const current = { x: gameRef.player.x, y: gameRef.player.y };
+    const movedAway = Math.sqrt((current.x - entity.x) ** 2 + (current.y - entity.y) ** 2);
+    const initialDist = Math.sqrt((initial.x - entity.x) ** 2 + (initial.y - entity.y) ** 2);
+
+    if (movedAway > initialDist + 80) {
+      resolveThePresence("flee");
+    }
+  }
+
+  // Check freeze (player hasn't moved much since seeing it)
+  if (missionState.firstSeen && missionState.playerPositions.length > 60) {
+    const recent = missionState.playerPositions.slice(-60);
+    const totalMovement = recent.reduce((sum, p, i) => {
+      if (i === 0) return 0;
+      return sum + Math.sqrt((p.x - recent[i-1].x)**2 + (p.y - recent[i-1].y)**2);
+    }, 0);
+    if (totalMovement < 15 && (Date.now() - missionState.firstSeen) > 3000) {
+      resolveThePresence("freeze");
+    }
+  }
+}
+
+function resolveThePresence(behavior) {
+  if (getCurrentPhase() !== "the_presence" || missionState.resolved) return;
   missionState.resolved = true;
+  if (missionState.timeout) clearTimeout(missionState.timeout);
 
-  const approachTime = endHesitation(playerModelRef, "confrontation");
-  const engaged = choiceId === "confrontation_engage";
+  const hesitationTime = endHesitation(playerModelRef, "presence");
+  const responseTime = missionState.firstSeen ? (Date.now() - missionState.firstSeen) / 1000 : hesitationTime;
 
-  calibrationResults.the_confrontation = {
-    engaged,
-    approachTime,
+  calibrationResults.the_presence = {
+    behavior, // "engage", "flee", "freeze", "timeout"
+    responseTime,
+    hesitationTime,
+    confrontationInstinct: behavior === "engage" ? "approach" : behavior === "flee" ? "avoid" : "freeze",
   };
 
   recordDecision(playerModelRef, {
-    type: "confrontation_choice",
-    description: engaged
-      ? `Engaged the entity after ${approachTime.toFixed(1)}s`
-      : `Avoided the entity after ${approachTime.toFixed(1)}s`,
-  });
-
-  const snapshot = serializeState(playerModelRef, gameRef, {
-    engaged,
-    avoided: !engaged,
-    approachTime,
+    type: "presence_choice",
+    description: `${behavior === "engage" ? "Approached" : behavior === "flee" ? "Fled from" : "Froze before"} the presence after ${responseTime.toFixed(1)}s.`,
   });
 
   send("calibration_event", {
-    calibration_type: "the_confrontation",
-    result: calibrationResults.the_confrontation,
-  }, snapshot);
+    calibration_type: "the_presence",
+    result: calibrationResults.the_presence,
+  }, serializeState(playerModelRef, gameRef, {
+    choiceDescription: `Player ${behavior === "engage" ? "approached" : behavior === "flee" ? "fled from" : "froze before"} the entity.`,
+  }));
 
   gameRef.calibrationObjects = [];
   completeMission(playerModelRef);
-  showCalibrationNarration(
-    engaged
-      ? "You faced it. It dissolves — but it felt you first."
-      : "You went around. Avoidance is also an answer the void remembers."
-  );
+
+  const messages = {
+    engage: "You walked toward it. Face to face, it dissolved — but it felt your heat first.",
+    flee: "You ran. The presence fades behind you, but its trajectory is now part of your map.",
+    freeze: "You froze. The presence circled you once, then drifted away. Stillness is also a choice.",
+    timeout: "Time passed. The presence arrived, and passed through you like smoke. You felt nothing. Or everything.",
+  };
+  narrate(messages[behavior] || messages.timeout);
   advancePhase();
 }
 
-// ─── CALIBRATION COMPLETE ──────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// CALIBRATION COMPLETE
+// ═══════════════════════════════════════════════════════════════════════════
 
 function onCalibrationComplete() {
   const summary = serializeCalibrationSummary(calibrationResults);
@@ -538,60 +548,27 @@ function onCalibrationComplete() {
   send("calibration_complete", { results: calibrationResults }, summary);
 
   playerModelRef.status = "adaptive";
-  updateStatusUI("the void is watching");
+  updateStatusUI("the world is watching");
 
-  showCalibrationNarration(
-    "Calibration complete. The world now knows your shape. It begins to change."
-  );
-  updateMissionUI("—", "Awaiting the world's response...");
+  narrate("Calibration complete. The world now knows your shape. It begins to change.");
+  showUI("—", "Awaiting the world's response...");
 }
 
-// ─── Collision Check (called from game loop) ───────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// DRAIN FIELD RENDERING BRIDGE
+// ═══════════════════════════════════════════════════════════════════════════
 
-export function checkCalibrationCollisions(playerX, playerY) {
-  const phase = getCurrentPhase();
-  if (phase === "waiting" || phase === "complete") return;
-
-  for (const obj of gameRef.calibrationObjects) {
-    const dx = playerX - obj.x;
-    const dy = playerY - obj.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist < obj.radius + 12) {
-      switch (phase) {
-        case "the_fork":
-          if (obj.id === "fork_left" || obj.id === "fork_right") {
-            handleForkChoice(obj.id);
-          }
-          break;
-        case "the_abandon":
-          if (obj.id === "abandon_goal" || obj.id === "abandon_exit") {
-            handleAbandonChoice(obj.id);
-          }
-          break;
-        case "the_scarcity":
-          handleScarcityInteraction(obj.id);
-          break;
-        case "the_confrontation":
-          if (
-            obj.id === "confrontation_engage" ||
-            obj.id === "confrontation_avoid"
-          ) {
-            handleConfrontationChoice(obj.id);
-          }
-          break;
-      }
-    }
-  }
+export function getDrainField() {
+  return missionState.drainField || null;
 }
 
-// ─── UI Helpers ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
 
-function updateMissionUI(title, objective) {
+function showUI(title, objective) {
   const content = document.getElementById("active-mission-content");
-  if (content) {
-    content.innerHTML = `<strong>${title}</strong><br/>${objective}`;
-  }
+  if (content) content.innerHTML = `<strong>${title}</strong><br/>${objective}`;
 
   const promptEl = document.getElementById("mission-prompt");
   const titleEl = document.getElementById("mission-prompt-title");
@@ -604,43 +581,12 @@ function updateMissionUI(title, objective) {
   }
 }
 
-function updateResourceUI() {
-  const bar = document.getElementById("resource-bar");
-  const text = document.getElementById("resource-text");
-  if (bar) {
-    const pct =
-      (playerModelRef.resources.current / playerModelRef.resources.max) * 100;
-    bar.style.setProperty("--energy-pct", `${pct}%`);
-  }
-  if (text) {
-    text.textContent = `${playerModelRef.resources.current}/${playerModelRef.resources.max}`;
-  }
-}
-
 function updateStatusUI(status) {
   const el = document.getElementById("status-text");
   if (el) el.textContent = status;
 }
 
-function showCalibrationNarration(message) {
-  // Import will be resolved at runtime
-  const { addLogEntry, showNarration } = require_main();
-  showNarration(message, 4000);
-  addLogEntry(message, "narration");
-}
-
-// Lazy import to avoid circular deps
-let _mainModule = null;
-function require_main() {
-  if (!_mainModule) {
-    _mainModule = {
-      addLogEntry: window.__endless_addLogEntry,
-      showNarration: window.__endless_showNarration,
-    };
-  }
-  return _mainModule;
-}
-
-export function getCalibrationResults() {
-  return calibrationResults;
+function narrate(message) {
+  window.__endless_showNarration?.(message, 4500);
+  window.__endless_addLogEntry?.(message, "narration");
 }
